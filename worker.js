@@ -908,7 +908,8 @@ export default {
   async fetch(request, env, ctx) {
     try {
       const url = new URL(request.url);
-      const path = url.pathname;
+      // Tolerate doubled slashes (e.g. a webhook URL ending in "//tg").
+      const path = url.pathname.replace(/\/{2,}/g, "/");
 
       // Telegram webhook: answer 200 at once, do the work in the background.
       if (path === "/tg") {
