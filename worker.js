@@ -607,16 +607,16 @@ $("langBtn").onclick = () => {
 };
 
 function esc(s){ return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
-async function copyText(t, btn){
+async function copyText(text, btn){
   let done = false;
   try {
-    await navigator.clipboard.writeText(t);
+    await navigator.clipboard.writeText(text);
     done = true;
   } catch {
     // Fallback for browsers where the Clipboard API is unavailable/denied.
     try {
       const ta = document.createElement("textarea");
-      ta.value = t;
+      ta.value = text;
       ta.style.position = "fixed";
       ta.style.opacity = "0";
       document.body.appendChild(ta);
@@ -625,15 +625,14 @@ async function copyText(t, btn){
       ta.remove();
     } catch { done = false; }
   }
-  if (!done) { prompt("Copy this link:", t); return; }
+  if (!done) { prompt("Copy this link:", text); return; }
   const o = btn.textContent;
   btn.textContent = t("copied");
   setTimeout(() => btn.textContent = o, 1500);
 }
-// One delegated listener for all Copy buttons (they are rendered dynamically).
-// NOTE: do NOT use inline onclick="copyText(\"...\")" — the double quotes
-// inside the attribute break the HTML and the button silently does nothing.
-out.addEventListener("click", (e) => {
+// One delegated listener on the whole document: copy/share buttons live in
+// the results AND in the recent-links history (different containers).
+document.addEventListener("click", (e) => {
   const b = e.target.closest("[data-copy]");
   if (b) { copyText(b.getAttribute("data-copy"), b); return; }
   const s = e.target.closest("[data-share]");
