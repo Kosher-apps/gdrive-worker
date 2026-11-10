@@ -504,6 +504,11 @@ const HOME_HTML = String.raw`<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Drive Direct Link</title>
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#1a73e8">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <style>
   * { box-sizing: border-box; }
   body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; background: #f6f7f9; color: #1a1a1a; }
@@ -566,7 +571,8 @@ const STR = {
     download: "Download", open: "Open",
     copy: "Copy", copied: "Copied!", share: "Share",
     recent: "Recent links", clear: "Clear",
-    embed: "Embed code", embedHint: "Paste this code into any website to play the video there."
+    embed: "Embed code", embedHint: "Paste this code into any website to play the video there.",
+    qr: "Scan to download on another device"
   },
   he: {
     title: "קישור ישיר לדרייב",
@@ -582,7 +588,8 @@ const STR = {
     download: "הורדה", open: "פתח",
     copy: "העתק", copied: "הועתק!", share: "שתף",
     recent: "קישורים אחרונים", clear: "נקה",
-    embed: "קוד הטמעה", embedHint: "מדביקים את הקוד הזה בכל אתר כדי לנגן את הסרטון שם."
+    embed: "קוד הטמעה", embedHint: "מדביקים את הקוד הזה בכל אתר כדי לנגן את הסרטון שם.",
+    qr: "סורקים כדי להוריד במכשיר אחר"
   }
 };
 let LANG = "en";
@@ -651,6 +658,10 @@ function linkRow(label, href){
     '<button class="ghost" type="button" data-share="' + esc(href) + '">' + esc(t("share")) + '</button></div>' +
     '<div class="links"><a href="' + esc(href) + '" target="_blank" rel="noopener">' + esc(label) + ' ↗</a></div>';
 }
+function qrHtml(direct) {
+  const src = "https://api.qrserver.com/v1/create-qr-code/?size=160x160&margin=8&data=" + encodeURIComponent(direct);
+  return '<p style="margin-top:12px"><img loading="lazy" alt="QR code" width="160" height="160" src="' + esc(src) + '"></p><p class="muted">' + esc(t("qr")) + '</p>';
+}
 
 $("paste").onclick = async () => {
   try { $("url").value = await navigator.clipboard.readText(); } catch { $("url").focus(); }
@@ -707,6 +718,7 @@ function renderOne(res) {
   } else {
     h += linkRow(t("direct"), d.direct);
     h += linkRow(t("page"), d.page);
+    h += qrHtml(d.direct);
     if (d.mime && d.mime.startsWith("video/")) {
       h += '<p>' + esc(t("watch")) + '</p>';
       h += '<video controls preload="metadata" src="' + esc(d.direct) + '"></video>';
@@ -755,6 +767,8 @@ function renderHistory() {
 }
 
 applyLang();
+
+if ("serviceWorker" in navigator) { navigator.serviceWorker.register("/sw.js").catch(() => {}); }
 </script>
 </body>
 </html>`;
@@ -816,6 +830,7 @@ function filePageHtml(info) {
     ${preview}
     ${info.type === "file" ? `<a class="btn" href="${esc(dl)}">Download</a>` : ""}
     ${info.type === "file" ? `<p class="muted">Direct link: <code>${esc(info.direct)}</code></p>` : ""}
+    ${info.type === "file" ? `<p><img loading="lazy" alt="QR code" width="160" height="160" src="https://api.qrserver.com/v1/create-qr-code/?size=160x160&amp;margin=8&amp;data=${encodeURIComponent(info.direct)}"></p><p class="muted">Scan to download on another device</p>` : ""}
     ${info.type === "file" && info.embed ? `<p><b>Embed code</b></p><div style="display:flex;gap:8px;align-items:center"><code style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(info.embed)}</code><button type="button" data-copy="${esc(info.embed)}">Copy</button></div>` : ""}
     ${itemsHtml}
     <p class="muted"><a href="/">← Back to Drive Direct Link</a> · <a href="${esc(info.drive)}" target="_blank" rel="noopener">Open in Google Drive ↗</a></p>
@@ -846,16 +861,76 @@ function extractIdFromText(text) {
   return null;
 }
 
-async function tgSend(env, chatId, text) {
-  const r = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+async function tgApi(env, method, body) {
+  const r = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true }),
+    body: JSON.stringify(body),
   });
   if (!r.ok) {
     const t = await r.text().catch(() => "");
-    throw new Error(`Telegram sendMessage ${r.status}: ${t.slice(0, 200)}`);
+    throw new Error(`Telegram ${method} ${r.status}: ${t.slice(0, 200)}`);
   }
+  return r.json().catch(() => ({}));
+}
+
+async function tgSend(env, chatId, text) {
+  await tgApi(env, "sendMessage", { chat_id: chatId, text, disable_web_page_preview: true });
+}
+
+/** Answer an inline query ("@bot <drive link>" typed in any chat). */
+async function answerInlineQuery(inlineQuery, env, origin) {
+  const q = (inlineQuery.query || "").trim();
+  const id = extractIdFromText(q);
+  let results;
+  if (!id) {
+    results = [{
+      type: "article",
+      id: "help",
+      title: "Paste a Google Drive link",
+      description: "Type a public Drive file or folder link after the bot name.",
+      input_message_content: {
+        message_text: "Send me a public Google Drive file or folder link and I'll reply with a direct download link.",
+      },
+    }];
+  } else {
+    try {
+      const info = await getFileInfo(id, env, origin);
+      const name = String(info.name || "").replace(/[\r\n]+/g, " ");
+      const desc = info.type === "folder"
+        ? "Folder" + (info.items ? " (" + info.items.length + " files)" : "")
+        : (info.size_human ? info.size_human + " · " : "") + (info.mime || "file");
+      const text = info.type === "folder"
+        ? "📁 " + name + "\nFolder" + (info.items ? " (" + info.items.length + " files)" : "") + "\n\nOpen: " + info.page
+        : "📄 " + name + "\n" +
+          (info.size_human ? "Size: " + info.size_human + "\n" : "") +
+          "Type: " + (info.mime || "") + "\n\n" +
+          "Download: " + info.direct + "\nFile page: " + info.page;
+      results = [{
+        type: "article",
+        id: info.id,
+        title: name.slice(0, 256),
+        description: desc.slice(0, 256),
+        input_message_content: { message_text: text, disable_web_page_preview: true },
+      }];
+    } catch (e) {
+      results = [{
+        type: "article",
+        id: "error",
+        title: "Couldn't read that file",
+        description: "Make sure it's shared as 'Anyone with the link'.",
+        input_message_content: {
+          message_text: "I couldn't read that Drive file. Make sure it's shared as 'Anyone with the link'.",
+        },
+      }];
+    }
+  }
+  await tgApi(env, "answerInlineQuery", {
+    inline_query_id: inlineQuery.id,
+    results,
+    cache_time: 0,
+    is_personal: true,
+  });
 }
 
 /** Handle one Telegram update (run via ctx.waitUntil; Telegram already got its 200). */
@@ -865,13 +940,18 @@ async function processTelegramUpdate(update, env, origin) {
       console.warn("[tg] no TELEGRAM_BOT_TOKEN secret set — update ignored");
       return;
     }
+    // Inline mode: "@bot <drive link>" typed in any chat.
+    if (update.inline_query) {
+      await answerInlineQuery(update.inline_query, env, origin);
+      return;
+    }
     const msg = update.message || update.edited_message;
     if (!msg || typeof msg.text !== "string") return;
     const chatId = msg.chat.id;
     const text = msg.text.trim();
     let reply;
     if (text === "/start" || text === "/help") {
-      reply = "Send me a public Google Drive file or folder link and I'll reply with a direct download link.\n\nJust paste the link — no sign-in, nothing is stored.";
+      reply = "Send me a public Google Drive file or folder link and I'll reply with a direct download link.\n\nJust paste the link — no sign-in, nothing is stored.\n\nTip: you can also use me inline — in any chat, type @, pick me, and paste a Drive link.";
     } else {
       const id = extractIdFromText(text);
       if (!id) {
@@ -921,7 +1001,7 @@ export default {
         }
         let update = null;
         try { update = await request.json(); } catch {}
-        console.log("[tg] webhook POST received" + (update && update.message ? " (message)" : " (no message)"));
+        console.log("[tg] webhook POST received" + (update && update.inline_query ? " (inline query)" : update && update.message ? " (message)" : " (no message)"));
         if (update) ctx.waitUntil(processTelegramUpdate(update, env, url.origin));
         return json({ ok: true });
       }
@@ -944,6 +1024,42 @@ export default {
         return new Response(HOME_HTML, {
           headers: { "content-type": "text/html; charset=utf-8" },
         });
+      }
+
+      // PWA: installable web app (Add to Home screen).
+      if (path === "/manifest.json" || path === "/manifest.webmanifest") {
+        return json({
+          name: "Drive Direct Link",
+          short_name: "DriveLink",
+          description: "Turn a public Google Drive link into a direct download link.",
+          start_url: "/",
+          scope: "/",
+          display: "standalone",
+          background_color: "#f6f7f9",
+          theme_color: "#1a73e8",
+          icons: [
+            { src: "/icon-192.png", sizes: "192x192", type: "image/png" },
+            { src: "/icon-512.png", sizes: "512x512", type: "image/png" },
+          ],
+        });
+      }
+
+      if (path === "/icon-192.png" || path === "/icon-512.png") {
+        // Icons live in the GitHub repo; redirect there.
+        return Response.redirect(
+          `https://raw.githubusercontent.com/Kosher-apps/gdrive-worker/main${path}`,
+          302
+        );
+      }
+
+      if (path === "/sw.js") {
+        // Minimal service worker (pass-through; no caching, so pages never go stale).
+        return new Response(
+          `self.addEventListener("install", (e) => self.skipWaiting());\n` +
+          `self.addEventListener("activate", (e) => self.clients.claim());\n` +
+          `self.addEventListener("fetch", () => {});\n`,
+          { headers: { "content-type": "text/javascript; charset=utf-8" } }
+        );
       }
 
       if (path === "/api") {
