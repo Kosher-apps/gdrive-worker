@@ -862,7 +862,10 @@ async function tgSend(env, chatId, text) {
 /** Handle one Telegram update (run via ctx.waitUntil; Telegram already got its 200). */
 async function processTelegramUpdate(update, env, origin) {
   try {
-    if (!env.TELEGRAM_BOT_TOKEN) return;
+    if (!env.TELEGRAM_BOT_TOKEN) {
+      console.warn("[tg] no TELEGRAM_BOT_TOKEN secret set — update ignored");
+      return;
+    }
     const msg = update.message || update.edited_message;
     if (!msg || typeof msg.text !== "string") return;
     const chatId = msg.chat.id;
@@ -889,6 +892,7 @@ async function processTelegramUpdate(update, env, origin) {
     }
     await tgSend(env, chatId, reply);
   } catch (e) {
+    console.error("[tg] update failed:", e && e.message ? e.message : e);
     try {
       const msg = update.message || update.edited_message;
       if (msg && env.TELEGRAM_BOT_TOKEN) {
@@ -917,6 +921,7 @@ export default {
         }
         let update = null;
         try { update = await request.json(); } catch {}
+        console.log("[tg] webhook POST received" + (update && update.message ? " (message)" : " (no message)"));
         if (update) ctx.waitUntil(processTelegramUpdate(update, env, url.origin));
         return json({ ok: true });
       }
