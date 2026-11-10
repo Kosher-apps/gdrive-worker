@@ -1,0 +1,7 @@
+name = "gdrive-direct-link"
+main = "worker.js"
+compatibility_date = "2026-11-01"
+
+# No vars here on purpose. The Google API key is a secret, set with:
+#   npx wrangler secret put GOOGLE_API_KEY
+# (never put a real key in this file)
