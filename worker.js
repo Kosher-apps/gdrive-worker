@@ -498,7 +498,7 @@ async function handleDownload(request, env, id, filenameParam) {
 
 // ------------------------------------------------------------------ pages
 
-const HOME_HTML = `<!DOCTYPE html>
+const HOME_HTML = String.raw`<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
