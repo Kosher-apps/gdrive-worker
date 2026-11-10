@@ -171,23 +171,43 @@ async function scrapeFilePage(id) {
   });
   const html = await r.text();
 
+  // Google sometimes answers the scrape with a bot-check ("sorry") page
+  // instead of the file page — never treat that page's content as metadata.
+  if (r.url.includes("/sorry/") || /google\.com\/sorry|302 Moved/i.test(html)) {
+    const e = new Error(
+      "Google showed a bot-check page instead of the file details. Set a GOOGLE_API_KEY secret (worker Settings → Variables and Secrets) so metadata comes from the Drive API instead of scraping."
+    );
+    e.status = 502;
+    throw e;
+  }
+
   if (/Sign in|accounts\.google\.com/i.test(html) && !/drive\.google\.com/i.test(html)) {
     const e = new Error("File is not public (or does not exist). Share it as 'Anyone with the link'.");
     e.status = 403;
     throw e;
   }
 
-  // <title>name - Google Drive</title>
-  let name = null;
+  // <title>name - Google Drive</title> — collect candidates, then keep the
+  // first one that is a real file name (never a URL or a placeholder).
+  const candidates = [];
   const title = html.match(/<title>(.*?)<\/title>/is);
   if (title) {
-    name = title[1].replace(/\s*-\s*Google Drive\s*$/i, "").trim();
-    if (!name || /^Google Drive$/i.test(name)) name = null;
+    const t = title[1].replace(/\s*-\s*Google Drive\s*$/i, "").trim();
+    if (t) candidates.push(t);
   }
-  if (!name) {
-    const m = html.match(/"name"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-    if (m) name = JSON.parse(`"${m[1]}"`);
+  const m = html.match(/"name"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+  if (m) {
+    try {
+      candidates.push(JSON.parse(`"${m[1]}"`));
+    } catch {
+      // ignore a malformed JSON escape
+    }
   }
+  const name =
+    candidates.find(
+      (n) =>
+        n && !/^https?:\/\//i.test(n) && !/^Google Drive$/i.test(n) && n.length <= 255
+    ) || null;
   let size = null;
   const sizeM =
     html.match(/"sizeBytes"\s*:\s*"(\d+)"/) || html.match(/"size"\s*:\s*"(\d+)"/);
@@ -639,7 +659,12 @@ $("paste").onclick = async () => {
 $("url").addEventListener("keydown", (e) => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); $("go").click(); } });
 
 $("go").onclick = async () => {
-  const inputs = [...new Set($("url").value.split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean))];
+  // Find Drive links / bare IDs in the pasted text instead of splitting it,
+  // so a link can never be chopped into pieces.
+  const raw = $("url").value.match(/https?:\/\/[^\s,;"']+|\b[A-Za-z0-9_-]{25,}\b/g) || [];
+  const cleaned = raw.map((s) => s.replace(/[).,;:!?]+$/, ""));
+  // A bare ID that already appears inside a pasted URL is the same file.
+  const inputs = [...new Set(cleaned.filter((f) => !cleaned.some((g) => g.startsWith("http") && g !== f && g.includes(f))))];
   if (!inputs.length) { out.innerHTML = '<p class="err">' + esc(t("empty")) + '</p>'; return; }
   $("go").disabled = true;
   out.innerHTML = "<p>" + esc(t("loading")) + "</p>";
@@ -812,9 +837,11 @@ document.addEventListener("click", function (e) {
 // ------------------------------------------------------- Telegram bot
 
 function extractIdFromText(text) {
-  const tokens = String(text || "").split(/[\s<>"']+/).filter(Boolean);
-  for (const tok of tokens) {
-    const id = extractId(tok);
+  // Find Drive links / bare IDs in the message instead of splitting it,
+  // so a link can never be chopped into pieces.
+  const found = String(text || "").match(/https?:\/\/[^\s<>"']+|\b[A-Za-z0-9_-]{25,}\b/g) || [];
+  for (const tok of found) {
+    const id = extractId(tok.replace(/[).,;:!?]+$/, ""));
     if (id) return id;
   }
   return null;
