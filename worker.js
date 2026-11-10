@@ -261,6 +261,11 @@ async function getFileInfo(id, env, origin) {
       ? null
       : `${origin}/dl/${meta.id}/${encodeURIComponent(meta.name)}`,
     page: `${origin}/f/${meta.id}`,
+    // Videos only: a ready-to-paste iframe snippet for embedding the
+    // video on any other website (plays via /embed/<id>).
+    embed: (!isFolder && meta.mimeType && meta.mimeType.startsWith("video/"))
+      ? `<iframe src="${origin}/embed/${meta.id}" width="640" height="360" frameborder="0" allowfullscreen></iframe>`
+      : null,
     drive: meta.webViewLink || `https://drive.google.com/file/d/${meta.id}/view`,
   };
   if (isFolder) {
@@ -487,6 +492,7 @@ const HOME_HTML = `<!DOCTYPE html>
   p.sub { color: #555; margin: 0 0 20px; }
   .card { background: #fff; border: 1px solid #e3e5e8; border-radius: 14px; padding: 18px; }
   input[type=text] { width: 100%; padding: 12px; font-size: 16px; border: 1px solid #c9cdd3; border-radius: 10px; }
+  textarea { width: 100%; padding: 12px; font-size: 16px; border: 1px solid #c9cdd3; border-radius: 10px; font-family: inherit; resize: vertical; }
   button { cursor: pointer; border: 0; border-radius: 10px; padding: 12px 18px; font-size: 16px; font-weight: 600; background: #1a73e8; color: #fff; }
   button.ghost { background: #eef1f4; color: #1a1a1a; }
   button:disabled { opacity: .55; cursor: default; }
@@ -507,21 +513,78 @@ const HOME_HTML = `<!DOCTYPE html>
 </head>
 <body>
 <main>
-  <h1>Drive Direct Link</h1>
-  <p class="sub">Paste a public Google Drive file or folder link and get a direct download link. No sign-in, nothing is stored.</p>
+  <div style="display:flex;justify-content:flex-end"><button class="ghost" id="langBtn" type="button">עברית</button></div>
+  <h1 id="t-title">Drive Direct Link</h1>
+  <p class="sub" id="t-sub">Paste a public Google Drive file or folder link and get a direct download link. No sign-in, nothing is stored.</p>
   <div class="card">
-    <input id="url" type="text" placeholder="https://drive.google.com/file/d/…/view" autocomplete="off" spellcheck="false">
+    <textarea id="url" rows="3" placeholder="https://drive.google.com/file/d/…/view" autocomplete="off" spellcheck="false"></textarea>
     <div class="row">
       <button id="go">Get link</button>
       <button class="ghost" id="paste" type="button">Paste</button>
     </div>
     <div id="out"></div>
+    <div id="history"></div>
   </div>
-  <p class="muted">Only files shared as “Anyone with the link” work. Large files are handled automatically (virus-scan confirmation).</p>
+  <p class="muted" id="t-note">Only files shared as “Anyone with the link” work. Large files are handled automatically (virus-scan confirmation).</p>
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
 const out = $("out");
+
+const STR = {
+  en: {
+    title: "Drive Direct Link",
+    sub: "Paste a public Google Drive file or folder link and get a direct download link. No sign-in, nothing is stored.",
+    ph: "https://drive.google.com/file/d/…/view — one link per line",
+    go: "Get link", paste: "Paste",
+    note: "Only files shared as “Anyone with the link” work. Large files are handled automatically (virus-scan confirmation).",
+    loading: "Loading…", empty: "Paste a Drive link first.", wentWrong: "Something went wrong.",
+    name: "Name", type: "Type", size: "Size",
+    direct: "Direct download link", page: "File page",
+    watch: "Watch / stream: open the file page, or play the direct link — it supports seeking.",
+    files: "Files", emptyFolder: "This folder is empty.", openFolder: "Open folder page",
+    download: "Download", open: "Open",
+    copy: "Copy", copied: "Copied!", share: "Share",
+    recent: "Recent links", clear: "Clear",
+    embed: "Embed code", embedHint: "Paste this code into any website to play the video there."
+  },
+  he: {
+    title: "קישור ישיר לדרייב",
+    sub: "מדביקים קישור ציבורי לדרייב ומקבלים קישור הורדה ישיר. בלי התחברות, שום דבר לא נשמר.",
+    ph: "https://drive.google.com/file/d/…/view — קישור אחד בכל שורה",
+    go: "קבל קישור", paste: "הדבק",
+    note: "עובד רק על קבצים ששותפו כ״כל מי שיש לו קישור״. קבצים גדולים מטופלים אוטומטית (אישור סריקת וירוסים).",
+    loading: "טוען…", empty: "תדביק קודם קישור דרייב.", wentWrong: "משהו השתבש.",
+    name: "שם", type: "סוג", size: "גודל",
+    direct: "קישור הורדה ישיר", page: "דף הקובץ",
+    watch: "צפייה / סטרימינג: פותחים את דף הקובץ, או מנגנים את הקישור הישיר — אפשר לדלג.",
+    files: "קבצים", emptyFolder: "התיקייה ריקה.", openFolder: "פתח את דף התיקייה",
+    download: "הורדה", open: "פתח",
+    copy: "העתק", copied: "הועתק!", share: "שתף",
+    recent: "קישורים אחרונים", clear: "נקה",
+    embed: "קוד הטמעה", embedHint: "מדביקים את הקוד הזה בכל אתר כדי לנגן את הסרטון שם."
+  }
+};
+let LANG = "en";
+try { LANG = localStorage.getItem("ddl-lang") || "en"; } catch {}
+function t(k) { return (STR[LANG] && STR[LANG][k]) || STR.en[k] || k; }
+function applyLang() {
+  document.documentElement.lang = LANG;
+  document.documentElement.dir = LANG === "he" ? "rtl" : "ltr";
+  $("t-title").textContent = t("title");
+  $("t-sub").textContent = t("sub");
+  $("url").placeholder = t("ph");
+  $("go").textContent = t("go");
+  $("paste").textContent = t("paste");
+  $("t-note").textContent = t("note");
+  $("langBtn").textContent = LANG === "he" ? "English" : "עברית";
+  renderHistory();
+}
+$("langBtn").onclick = () => {
+  LANG = LANG === "he" ? "en" : "he";
+  try { localStorage.setItem("ddl-lang", LANG); } catch {}
+  applyLang();
+};
 
 function esc(s){ return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
 async function copyText(t, btn){
@@ -544,7 +607,7 @@ async function copyText(t, btn){
   }
   if (!done) { prompt("Copy this link:", t); return; }
   const o = btn.textContent;
-  btn.textContent = "Copied!";
+  btn.textContent = t("copied");
   setTimeout(() => btn.textContent = o, 1500);
 }
 // One delegated listener for all Copy buttons (they are rendered dynamically).
@@ -552,65 +615,122 @@ async function copyText(t, btn){
 // inside the attribute break the HTML and the button silently does nothing.
 out.addEventListener("click", (e) => {
   const b = e.target.closest("[data-copy]");
-  if (b) copyText(b.getAttribute("data-copy"), b);
+  if (b) { copyText(b.getAttribute("data-copy"), b); return; }
+  const s = e.target.closest("[data-share]");
+  if (s) {
+    const url = s.getAttribute("data-share");
+    if (navigator.share) {
+      navigator.share({ url }).catch(() => {});
+    } else {
+      copyText(url, s);
+    }
+  }
 });
 function linkRow(label, href){
   return '<div class="copyrow"><code>' + esc(href) + '</code>' +
-    '<button class="ghost" type="button" data-copy="' + esc(href) + '">Copy</button></div>' +
+    '<button class="ghost" type="button" data-copy="' + esc(href) + '">' + esc(t("copy")) + '</button>' +
+    '<button class="ghost" type="button" data-share="' + esc(href) + '">' + esc(t("share")) + '</button></div>' +
     '<div class="links"><a href="' + esc(href) + '" target="_blank" rel="noopener">' + esc(label) + ' ↗</a></div>';
 }
 
 $("paste").onclick = async () => {
   try { $("url").value = await navigator.clipboard.readText(); } catch { $("url").focus(); }
 };
-$("url").addEventListener("keydown", (e) => { if (e.key === "Enter") $("go").click(); });
+$("url").addEventListener("keydown", (e) => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); $("go").click(); } });
 
 $("go").onclick = async () => {
-  const v = $("url").value.trim();
-  if (!v) { out.innerHTML = '<p class="err">Paste a Drive link first.</p>'; return; }
+  const inputs = [...new Set($("url").value.split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean))];
+  if (!inputs.length) { out.innerHTML = '<p class="err">' + esc(t("empty")) + '</p>'; return; }
   $("go").disabled = true;
-  out.innerHTML = "<p>Loading…</p>";
-  try {
-    const r = await fetch("/api?url=" + encodeURIComponent(v));
-    const d = await r.json();
-    if (!d.ok) throw new Error(d.error || ("HTTP " + r.status));
-    let h = '<div class="meta"><div><b>Name</b> ' + esc(d.name) + '</div>' +
-      '<div><b>Type</b> ' + esc(d.type) + (d.mime ? " · " + esc(d.mime) : "") + '</div>' +
-      (d.size_human ? '<div><b>Size</b> ' + esc(d.size_human) + '</div>' : "") + '</div>';
-    if (d.type === "folder") {
-      h += '<p><a href="' + esc(d.page) + '">Open folder page ↗</a></p>';
-      if (d.items && d.items.length) {
-        h += "<h3>Files (" + d.items.length + ")</h3>";
-        for (const it of d.items) {
-          h += '<div class="fileitem"><span>' + esc(it.name) + (it.size_human ? ' <span class="muted">(' + esc(it.size_human) + ')</span>' : "") + '</span>' +
-            (it.direct ? '<a href="' + esc(it.direct) + '">Download</a>' : '<a href="' + esc(it.page) + '">Open</a>') + '</div>';
-        }
-      } else if (d.note) {
-        h += '<p class="muted">' + esc(d.note) + '</p>';
-      } else {
-        h += '<p class="muted">This folder is empty.</p>';
+  out.innerHTML = "<p>" + esc(t("loading")) + "</p>";
+  const results = await Promise.all(inputs.map(async (v) => {
+    try {
+      const r = await fetch("/api?url=" + encodeURIComponent(v));
+      const d = await r.json();
+      if (!d.ok) throw new Error(d.error || ("HTTP " + r.status));
+      return { v, d };
+    } catch (e) {
+      return { v, error: e.message || t("wentWrong") };
+    }
+  }));
+  out.innerHTML = results.map(renderOne).join("");
+  saveHistory(results.filter((r) => r.d).map((r) => r.d));
+  renderHistory();
+  $("go").disabled = false;
+};
+
+function renderOne(res) {
+  if (res.error) {
+    return '<p class="err">' + esc(res.v) + ": " + esc(res.error) + "</p>";
+  }
+  const d = res.d;
+  let h = '<div class="meta"><div><b>' + esc(t("name")) + '</b> ' + esc(d.name) + '</div>' +
+    '<div><b>' + esc(t("type")) + '</b> ' + esc(d.type) + (d.mime ? " · " + esc(d.mime) : "") + '</div>' +
+    (d.size_human ? '<div><b>' + esc(t("size")) + '</b> ' + esc(d.size_human) + '</div>' : "") + '</div>';
+  if (d.type === "folder") {
+    h += '<p><a href="' + esc(d.page) + '">' + esc(t("openFolder")) + '</a></p>';
+    if (d.items && d.items.length) {
+      h += "<h3>" + esc(t("files")) + " (" + d.items.length + ")</h3>";
+      for (const it of d.items) {
+        h += '<div class="fileitem"><span>' + esc(it.name) + (it.size_human ? ' <span class="muted">(' + esc(it.size_human) + ')</span>' : "") + '</span>' +
+          (it.direct ? '<a href="' + esc(it.direct) + '">' + esc(t("download")) + '</a>' : '<a href="' + esc(it.page) + '">' + esc(t("open")) + '</a>') + '</div>';
       }
+    } else if (d.note) {
+      h += '<p class="muted">' + esc(d.note) + '</p>';
     } else {
-      h += linkRow("Direct download link", d.direct);
-      h += linkRow("File page", d.page);
-      if (d.mime && d.mime.startsWith("video/")) {
-        h += '<p><b>Watch / stream:</b> open the file page, or play the direct link — it supports seeking.</p>';
-        h += '<video controls preload="metadata" src="' + esc(d.direct) + '"></video>';
-      }
-      if (d.mime && d.mime.startsWith("audio/")) {
-        h += '<audio controls preload="metadata" style="width:100%;margin-top:12px" src="' + esc(d.direct) + '"></audio>';
-      }
-      if (d.mime && d.mime.startsWith("image/")) {
-        h += '<p><img src="' + esc(d.direct) + '" alt="" style="max-width:100%;border-radius:10px;margin-top:12px"></p>';
+      h += '<p class="muted">' + esc(t("emptyFolder")) + '</p>';
+    }
+  } else {
+    h += linkRow(t("direct"), d.direct);
+    h += linkRow(t("page"), d.page);
+    if (d.mime && d.mime.startsWith("video/")) {
+      h += '<p>' + esc(t("watch")) + '</p>';
+      h += '<video controls preload="metadata" src="' + esc(d.direct) + '"></video>';
+      if (d.embed) {
+        h += '<p><b>' + esc(t("embed")) + '</b></p>' +
+          '<div class="copyrow"><code>' + esc(d.embed) + '</code>' +
+          '<button class="ghost" type="button" data-copy="' + esc(d.embed) + '">' + esc(t("copy")) + '</button></div>' +
+          '<p class="muted">' + esc(t("embedHint")) + '</p>';
       }
     }
-    out.innerHTML = h;
-  } catch (e) {
-    out.innerHTML = '<p class="err">' + esc(e.message || "Something went wrong.") + '</p>';
-  } finally {
-    $("go").disabled = false;
+    if (d.mime && d.mime.startsWith("audio/")) {
+      h += '<audio controls preload="metadata" style="width:100%;margin-top:12px" src="' + esc(d.direct) + '"></audio>';
+    }
+    if (d.mime && d.mime.startsWith("image/")) {
+      h += '<p><img src="' + esc(d.direct) + '" alt="" style="max-width:100%;border-radius:10px;margin-top:12px"></p>';
+    }
+    if (d.mime === "application/pdf") {
+      h += '<iframe src="' + esc(d.direct) + '" style="width:100%;height:70vh;border:0;border-radius:10px;margin-top:12px"></iframe>';
+    }
   }
-};
+  return '<div class="card" style="margin-top:12px">' + h + '</div>';
+}
+
+function loadHistory() {
+  try { return JSON.parse(localStorage.getItem("ddl-history") || "[]"); } catch { return []; }
+}
+function saveHistory(items) {
+  try {
+    let h = loadHistory();
+    for (const d of items) {
+      h = h.filter((x) => x.direct !== d.direct);
+      h.unshift({ name: d.name, direct: d.direct, page: d.page, size: d.size_human || null, at: Date.now() });
+    }
+    localStorage.setItem("ddl-history", JSON.stringify(h.slice(0, 10)));
+  } catch {}
+}
+function renderHistory() {
+  const el = $("history");
+  if (!el) return;
+  const h = loadHistory();
+  if (!h.length) { el.innerHTML = ""; return; }
+  el.innerHTML = "<h3>" + esc(t("recent")) + ' <button class="ghost" id="clearHist" type="button">' + esc(t("clear")) + "</button></h3>" +
+    h.map((x) => '<div class="fileitem"><span>' + esc(x.name) + (x.size ? ' <span class="muted">(' + esc(x.size) + ')</span>' : "") + '</span><span><a href="' + esc(x.direct) + '">' + esc(t("download")) + '</a> · <button class="ghost" type="button" data-copy="' + esc(x.direct) + '">' + esc(t("copy")) + "</button></span></div>").join("");
+  const c = $("clearHist");
+  if (c) c.onclick = () => { try { localStorage.removeItem("ddl-history"); } catch {} renderHistory(); };
+}
+
+applyLang();
 </script>
 </body>
 </html>`;
@@ -620,10 +740,12 @@ function filePageHtml(info) {
   const isVideo = info.mime && info.mime.startsWith("video/");
   const isAudio = info.mime && info.mime.startsWith("audio/");
   const isImage = info.mime && info.mime.startsWith("image/");
+  const isPdf = info.mime === "application/pdf";
   let preview = "";
   if (isVideo) preview = `<video controls preload="metadata" src="${esc(info.direct)}" style="width:100%;border-radius:10px;background:#000"></video>`;
   else if (isAudio) preview = `<audio controls preload="metadata" src="${esc(info.direct)}" style="width:100%"></audio>`;
   else if (isImage) preview = `<img src="${esc(info.direct)}" alt="" style="max-width:100%;border-radius:10px">`;
+  else if (isPdf) preview = `<iframe src="${esc(info.direct)}" style="width:100%;height:70vh;border:0;border-radius:10px"></iframe>`;
 
   let itemsHtml = "";
   if (info.type === "folder") {
@@ -670,12 +792,83 @@ function filePageHtml(info) {
     ${preview}
     ${info.type === "file" ? `<a class="btn" href="${esc(dl)}">Download</a>` : ""}
     ${info.type === "file" ? `<p class="muted">Direct link: <code>${esc(info.direct)}</code></p>` : ""}
+    ${info.type === "file" && info.embed ? `<p><b>Embed code</b></p><div style="display:flex;gap:8px;align-items:center"><code style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(info.embed)}</code><button type="button" data-copy="${esc(info.embed)}">Copy</button></div>` : ""}
     ${itemsHtml}
     <p class="muted"><a href="/">← Back to Drive Direct Link</a> · <a href="${esc(info.drive)}" target="_blank" rel="noopener">Open in Google Drive ↗</a></p>
   </div>
 </main>
+<script>
+document.addEventListener("click", function (e) {
+  var b = e.target.closest("[data-copy]");
+  if (!b) return;
+  var v = b.getAttribute("data-copy");
+  if (navigator.clipboard) navigator.clipboard.writeText(v).then(function () { b.textContent = "Copied!"; });
+});
+</script>
 </body>
 </html>`;
+}
+
+// ------------------------------------------------------- Telegram bot
+
+function extractIdFromText(text) {
+  const tokens = String(text || "").split(/[\s<>"']+/).filter(Boolean);
+  for (const tok of tokens) {
+    const id = extractId(tok);
+    if (id) return id;
+  }
+  return null;
+}
+
+async function tgSend(env, chatId, text) {
+  const r = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true }),
+  });
+  if (!r.ok) {
+    const t = await r.text().catch(() => "");
+    throw new Error(`Telegram sendMessage ${r.status}: ${t.slice(0, 200)}`);
+  }
+}
+
+/** Handle one Telegram update (run via ctx.waitUntil; Telegram already got its 200). */
+async function processTelegramUpdate(update, env, origin) {
+  try {
+    if (!env.TELEGRAM_BOT_TOKEN) return;
+    const msg = update.message || update.edited_message;
+    if (!msg || typeof msg.text !== "string") return;
+    const chatId = msg.chat.id;
+    const text = msg.text.trim();
+    let reply;
+    if (text === "/start" || text === "/help") {
+      reply = "Send me a public Google Drive file or folder link and I'll reply with a direct download link.\n\nJust paste the link — no sign-in, nothing is stored.";
+    } else {
+      const id = extractIdFromText(text);
+      if (!id) {
+        reply = "I couldn't find a Google Drive link in that message. Send a Drive file or folder link (or a bare file ID).";
+      } else {
+        const info = await getFileInfo(id, env, origin);
+        const name = String(info.name || "").replace(/[\r\n]+/g, " ");
+        if (info.type === "folder") {
+          reply = "📁 " + name + "\nFolder" + (info.items ? " (" + info.items.length + " files)" : "") + "\n\nOpen: " + info.page;
+        } else {
+          reply = "📄 " + name + "\n" +
+            (info.size_human ? "Size: " + info.size_human + "\n" : "") +
+            "Type: " + (info.mime || "") + "\n\n" +
+            "Download: " + info.direct + "\nFile page: " + info.page;
+        }
+      }
+    }
+    await tgSend(env, chatId, reply);
+  } catch (e) {
+    try {
+      const msg = update.message || update.edited_message;
+      if (msg && env.TELEGRAM_BOT_TOKEN) {
+        await tgSend(env, msg.chat.id, "Sorry, I couldn't read that file. Make sure it's shared as 'Anyone with the link'.");
+      }
+    } catch {}
+  }
 }
 
 // ------------------------------------------------------------------ router
@@ -685,6 +878,21 @@ export default {
     try {
       const url = new URL(request.url);
       const path = url.pathname;
+
+      // Telegram webhook: answer 200 at once, do the work in the background.
+      if (path === "/tg") {
+        if (request.method !== "POST") return errJson("Telegram webhook expects POST.", 405);
+        if (env.TELEGRAM_WEBHOOK_SECRET) {
+          const got = request.headers.get("x-telegram-bot-api-secret-token") || "";
+          if (got !== env.TELEGRAM_WEBHOOK_SECRET) {
+            return new Response("Forbidden", { status: 403 });
+          }
+        }
+        let update = null;
+        try { update = await request.json(); } catch {}
+        if (update) ctx.waitUntil(processTelegramUpdate(update, env, url.origin));
+        return json({ ok: true });
+      }
 
       if (request.method === "OPTIONS") {
         return new Response(null, {
@@ -743,7 +951,34 @@ export default {
         }
       }
 
-      return errJson("Not found. Routes: / , /api?url=… , /dl/<id>/<filename> , /f/<id>", 404);
+      if (path.startsWith("/embed/")) {
+        const id = decodeURIComponent(path.slice(7).split("/")[0] || "");
+        if (!id) return new Response("Missing file ID.", { status: 400 });
+        try {
+          const info = await getFileInfo(id, env, url.origin);
+          if (info.type !== "file" || !(info.mime && info.mime.startsWith("video/"))) {
+            return new Response("This embed page is for video files only.", {
+              status: 400,
+              headers: { "content-type": "text/plain; charset=utf-8" },
+            });
+          }
+          return new Response(
+            `<!DOCTYPE html><html><head><meta charset="utf-8">` +
+            `<meta name="viewport" content="width=device-width, initial-scale=1">` +
+            `<title>${esc(info.name)}</title>` +
+            `<style>html,body{margin:0;padding:0;background:#000;height:100%}video{width:100%;height:100%;display:block}</style>` +
+            `</head><body><video controls preload="metadata" src="${esc(info.direct)}"></video></body></html>`,
+            { headers: { "content-type": "text/html; charset=utf-8" } }
+          );
+        } catch (e) {
+          return new Response("Could not open this file.", {
+            status: e.status || 500,
+            headers: { "content-type": "text/plain; charset=utf-8" },
+          });
+        }
+      }
+
+      return errJson("Not found. Routes: / , /api?url=… , /dl/<id>/<filename> , /f/<id> , /embed/<id> , /tg (Telegram webhook)", 404);
     } catch (e) {
       return errJson(e.message || "Internal error.", 500);
     }
