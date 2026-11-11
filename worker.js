@@ -1047,7 +1047,7 @@ export default {
       if (path === "/icon-192.png" || path === "/icon-512.png") {
         // Icons live in the GitHub repo; redirect there.
         return Response.redirect(
-          `https://raw.githubusercontent.com/Kosher-apps/gdrive-worker/main${path}`,
+          `https://raw.githubusercontent.com/meowhubdbg/gdrive-worker/main${path}`,
           302
         );
       }
